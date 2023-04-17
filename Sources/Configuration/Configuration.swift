@@ -8,6 +8,8 @@ public struct Configuration: Infallible, Identifiable {
  public static var defaultValue = Self()
  public var id: Name = .defaultValue
  public var silent = false
+ public var uppercase = false
+ public var capitalize = true
 
  public subscript<Value>(
   dynamicMember keyPath: WritableKeyPath<Name, Value>
@@ -33,113 +35,17 @@ public struct Configuration: Infallible, Identifiable {
    guard let string =
     input.map(String.init(describing:)).joined(separator: separator).wrapped
    else { return }
-   var message =
-    string.map {
-     /// - Note: Captures single characters
-     switch $0 {
-     case "⏎", "→": return "\($0, color: .white, style: .bold)"
-     case "{", "}", "[", "]": return "\($0, style: [.bold, .dim])"
-     case "-", "—":
-      return "\($0, color: .white, style: .bold)"
-     default: return "\($0)"
-     }
-    }.joined()
-
-   var startIndex = message.startIndex
-   /// - Note: Index matches are required for matching quotation marks
-   Peek(&message, &startIndex) { buffer in
-    var excludedRanges: [Range<String.Index>] = .empty
-    let lastIndex: String.Index? = buffer.advance(to: "\"")
-    guard lastIndex != nil else { return }
-    var indexMap =
-     buffer.elements.indices.map(where: { index in
-      excludedRanges.contains(where: { $0.contains(index) })
-     })
-    buffer.index = buffer.startIndex
-    let matchGroup: [Substring] = ["equals"]
-    for char in buffer {
-     if indexMap?.contains(buffer.index) ?? false {
-      indexMap?.removeFirst()
-      continue
-     }
-
-     guard let group = matchGroup.map(where: { $0.first! == char })
-     else { continue }
-
-     var match: Substring?
-     let startIndex = buffer.index(before: buffer.index)
-     for word in group {
-      // compare each word because we need to know if there are consequetive
-      // characters and if on might supercede another by length
-      guard let upperBound = buffer.elements.index(
-        startIndex, offsetBy: word.count, limitedBy: buffer.endIndex
-       ),
-       // the index map shouldn't contain the projected bound
-       indexMap?.contains(upperBound) ?? false,
-       let comparison = buffer[startIndex ..< upperBound]
-      else { continue }
-      let other = comparison.base
-      guard other == word.base else {
-       continue
-      }
-      if let last = match {
-       if comparison.count > last.count {
-        match = comparison
-       }
-      } else { match = comparison }
-     }
-
-     //     while let nextIndex = buffer.advance(to: "\"") {
-     //      if let startIndex = lastIndex {
-     //       let endIndex = buffer.index(nextIndex, offsetBy: 1)
-     //       let range = startIndex ..< endIndex
-     //       guard let match = buffer[range] else { break }
-     //       let insert = "\(match, color: .yellow, style: .bold)"
-     //       buffer.removeSubrange(startIndex ..< endIndex)
-     //       buffer.insert(contentsOf: insert, at: startIndex)
-     //       guard
-     //        let newIndex =
-     //        buffer.index(buffer.index, offsetBy: insert.count, limitedBy: buffer.endIndex)
-     //       else { break }
-     //       excludedRanges.append(buffer.index ..< newIndex)
-     //       buffer.index = newIndex
-     //       lastIndex = nil
-     //      } else {
-     //       lastIndex = nextIndex
-     //      }
-     //     }
-
-     if let match {
-      let insert = "\(match, color: .yellow)"
-      buffer.removeSubrange(insert.range)
-      buffer.insert(contentsOf: insert, at: buffer.index)
-      guard let newIndex = buffer.elements.index(
-       startIndex, offsetBy: insert.count, limitedBy: buffer.endIndex
-      )
-      else { break }
-      let range = startIndex ..< newIndex
-      excludedRanges.append(range)
-      buffer.index = newIndex
-      if let map = indexMap {
-       for index in map.indices {
-        if range.contains(map[index]) {
-         indexMap?.remove(at: index)
-        } else { break }
-       }
-      }
-      continue
-     }
-    }
-   }
 
    let subject = subject?.simplified
    let isError = subject == .error
    let isSuccess = subject == .success
    let header = subject == nil ? .empty :
     subject!.categoryDescription(
-     for: category, with: subcategory, prefix: prefix, suffix: suffix
+     self, for: category, with: subcategory, prefix: prefix, suffix: suffix
     )
-   message = "\(message, color: isError ? .red : isSuccess ? .green : .white)"
+   let message =
+    "\(string, color: isError ? .red : isSuccess ? .green : .white)"
+   
    print(header + .space + message, terminator: terminator)
   }
  }
@@ -162,45 +68,72 @@ public extension Configuration {
 extension Components.Subject {
  var color: Chalk.Color {
   switch self {
-  case .info, .database: return .cyan
-  case .error, .session, .queue, .service: return .red
-  case .test, .view, .cache, .leaf: return .green
-  case .migration: return .magenta
-  case .command: return .yellow
-  default: return .white
+   case .info, .database: return .cyan
+   case .error, .session, .queue, .service: return .red
+   case .test, .view, .cache, .leaf: return .green
+   case .migration: return .magenta
+   case .command: return .yellow
+   default: return .white
   }
  }
 
- var logDescription: String {
-  let desc = "\(rawValue.uppercased(), color: color, style: .bold)"
+ func logDescription(for: Configuration) -> String {
+  let desc =
+   """
+   \(`for`.uppercase ? rawValue.uppercased() :
+    `for`.capitalize ? rawValue.cap : rawValue, color: color, style: .bold)
+   """
   return "[ \(desc) ]"
  }
 
  func categoryDescription(
+  _ config: Configuration,
   for category: Components.Subject? = nil,
   with subcategory: Components.Subject? = nil,
   prefix: String? = nil, suffix: String? = nil
  ) -> String {
   guard
    category.notNil || subcategory.notNil || prefix.notNil || suffix.notNil
-  else { return logDescription }
+  else { return logDescription(for: config) }
+
+  let up = config.uppercase
+  let cap = config.capitalize
 
   let pre =
    """
-   \((category?.rawValue ?? prefix).unwrap { "\($0.uppercased())" },
-     color: color, style: .bold)
+   \((category?.rawValue ?? prefix).unwrap {
+    "\(up ? $0.uppercased() : cap ? $0.cap : $0)"
+   },
+   color: color, style: .bold)
    """
-  let sub = "\(rawValue.uppercased(), color: color, style: .bold)"
+
+  let sub =
+   """
+   \(up ? rawValue.uppercased() :
+    cap ? rawValue.cap : rawValue, color: color, style: .bold)
+   """
+
   let suff =
    """
-   \((subcategory?.rawValue ?? suffix).unwrap { " \($0.uppercased())" },
-     color: color)
+   \(
+    (subcategory?.rawValue ?? suffix).unwrap {
+     " \(up ? $0.uppercased() : cap ? $0.cap : $0)"
+    },
+    color: color
+   )
    """
   return "[ \(pre)\(sub)\(suff) ]"
  }
 }
 
 // MARK: Extensions
+extension String {
+ var cap: String {
+  var copy = self
+  return String(copy.removeFirst()).capitalized + copy
+ }
+}
+
 extension Components.Subject {
  var simplified: Self {
   let string = rawValue
